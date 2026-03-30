@@ -1288,7 +1288,7 @@ curl --socks5 username:password@server-ip:7779 https://httpbin.org/ip
 ```bash
 # ✅ 推荐方式：IP:端口 或 域名:端口
 curl -x http://proxy.example.com:7777 https://httpbin.org/ip
-curl -x http://123.45.67.89:7777 https://httpbin.org/ip
+curl -x http://your-server-ip:7777 https://httpbin.org/ip
 
 # ❌ 不支持：直接域名（除非反向代理到 80/443）
 curl -x http://proxy.example.com https://httpbin.org/ip
