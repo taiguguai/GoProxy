@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -276,7 +277,7 @@ func (s *Storage) GetAll() ([]Proxy, error) {
 	}
 	defer rows.Close()
 
-	var proxies []Proxy
+	proxies := make([]Proxy, 0)
 	for rows.Next() {
 		p, err := scanProxy(rows)
 		if err != nil {
@@ -466,7 +467,7 @@ func (s *Storage) GetWorstProxies(protocol string, limit int) ([]Proxy, error) {
 	}
 	defer rows.Close()
 
-	var proxies []Proxy
+	proxies := make([]Proxy, 0)
 	for rows.Next() {
 		p, err := scanProxy(rows)
 		if err != nil {
@@ -675,6 +676,8 @@ func (s *Storage) IncrementFailCount(address string) error {
 
 // GetByProtocol 按协议获取代理列表
 func (s *Storage) GetByProtocol(protocol string) ([]Proxy, error) {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+
 	rows, err := s.db.Query(
 		`SELECT id, address, protocol, exit_ip, exit_location, latency, quality_grade,
 		        use_count, success_count, fail_count, last_used, last_check, created_at, status
@@ -688,6 +691,78 @@ func (s *Storage) GetByProtocol(protocol string) ([]Proxy, error) {
 	defer rows.Close()
 
 	var proxies []Proxy
+	for rows.Next() {
+		p, err := scanProxy(rows)
+		if err != nil {
+			return nil, err
+		}
+		proxies = append(proxies, *p)
+	}
+	return proxies, nil
+}
+
+// GetFiltered 按可选单值条件获取代理列表（兼容旧调用）
+func (s *Storage) GetFiltered(protocol, quality, country string) ([]Proxy, error) {
+	var protocols []string
+	var qualities []string
+	var countries []string
+	if protocol != "" {
+		protocols = []string{strings.ToLower(strings.TrimSpace(protocol))}
+	}
+	if quality != "" {
+		qualities = []string{strings.ToUpper(strings.TrimSpace(quality))}
+	}
+	if country != "" {
+		countries = []string{strings.ToUpper(strings.TrimSpace(country))}
+	}
+	return s.GetFilteredMulti(protocols, qualities, countries)
+}
+
+func buildInPlaceholders(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", count), ",")
+}
+
+// GetFilteredMulti 按可选多值条件获取代理列表（SQL 层过滤，避免全量加载后内存过滤）
+func (s *Storage) GetFilteredMulti(protocols, qualities, countries []string) ([]Proxy, error) {
+	query := `SELECT id, address, protocol, exit_ip, exit_location, latency, quality_grade,
+		        use_count, success_count, fail_count, last_used, last_check, created_at, status
+		 FROM proxies
+		 WHERE status IN ('active', 'degraded') AND fail_count < 3`
+
+	args := make([]interface{}, 0, len(protocols)+len(qualities)+len(countries))
+
+	if len(protocols) > 0 {
+		query += " AND protocol IN (" + buildInPlaceholders(len(protocols)) + ")"
+		for _, protocol := range protocols {
+			args = append(args, strings.ToLower(strings.TrimSpace(protocol)))
+		}
+	}
+	if len(qualities) > 0 {
+		query += " AND quality_grade IN (" + buildInPlaceholders(len(qualities)) + ")"
+		for _, quality := range qualities {
+			args = append(args, strings.ToUpper(strings.TrimSpace(quality)))
+		}
+	}
+	if len(countries) > 0 {
+		// exit_location 形如 "US New York"，取前两位国家码匹配
+		query += " AND UPPER(SUBSTR(exit_location, 1, 2)) IN (" + buildInPlaceholders(len(countries)) + ")"
+		for _, country := range countries {
+			args = append(args, strings.ToUpper(strings.TrimSpace(country)))
+		}
+	}
+
+	query += " ORDER BY latency ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	proxies := make([]Proxy, 0)
 	for rows.Next() {
 		p, err := scanProxy(rows)
 		if err != nil {

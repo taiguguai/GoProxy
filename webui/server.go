@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -188,15 +189,33 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) apiProxies(w http.ResponseWriter, r *http.Request) {
-	protocol := r.URL.Query().Get("protocol")
-	var proxies []storage.Proxy
-	var err error
-	if protocol != "" {
-		proxies, err = s.storage.GetByProtocol(protocol)
-	} else {
-		proxies, err = s.storage.GetAll()
+func parseMultiFilter(rawValues []string, normalize func(string) string) []string {
+	seen := make(map[string]struct{})
+	items := make([]string, 0)
+	for _, raw := range rawValues {
+		for _, part := range strings.Split(raw, ",") {
+			item := strings.TrimSpace(part)
+			if item == "" {
+				continue
+			}
+			item = normalize(item)
+			if _, exists := seen[item]; exists {
+				continue
+			}
+			seen[item] = struct{}{}
+			items = append(items, item)
+		}
 	}
+	return items
+}
+
+func (s *Server) apiProxies(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	protocols := parseMultiFilter(query["protocol"], strings.ToLower)
+	qualities := parseMultiFilter(query["quality"], strings.ToUpper)
+	countries := parseMultiFilter(query["country"], strings.ToUpper)
+
+	proxies, err := s.storage.GetFilteredMulti(protocols, qualities, countries)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
